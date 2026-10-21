@@ -94,3 +94,9 @@ def test_summarize_run_outcomes(statuses, outcome, n_lessons):
     assert outline == ["research: Research", "writing: Write"]
     assert result_outcome == outcome
     assert len(lessons) == n_lessons
+
+def test_research_without_sources_is_not_a_success():
+    results = {1: {"status": "done", "had_evidence": False}, 2: {"status": "done"}}
+    _, outcome, lessons = summarize_run(_plan(), results)
+    assert outcome == "partial"
+    assert "found nothing" in lessons[0]

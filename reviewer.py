@@ -27,9 +27,14 @@ def review_output(specialist: str, output: str, evidence: str, task: str, contex
 
     if "ERROR" in text or text.startswith("Stopped:"):
         issues.append("The output contains an error message instead of a result.")
-
+        
     if specialist == "research" and not evidence.strip():
-        issues.append("The research step did not retrieve anything from the knowledge base. Search before answering.")
+        honest = any(p in text.lower() for p in ("no information", "no relevant", "not found", "could not find"))
+        if not honest:
+            issues.append(
+                "The search returned nothing relevant, so you have no sources. Say clearly that the "
+                "knowledge base has no information on this; do not invent content, sources or numbers."
+            )
 
     if specialist in {"research", "analysis", "writing"}:
         sources = f"{evidence}\n{task}\n{context}"

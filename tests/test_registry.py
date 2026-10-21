@@ -1,7 +1,6 @@
 import pytest
 from registry import ToolRegistry, ToolSpec
-from tools_builtin import calculator, read_file
-
+from tools_builtin import calculator, read_file, write_file
 
 def make_registry(limit: int = 30) -> ToolRegistry:
     reg = ToolRegistry()
@@ -53,3 +52,7 @@ def test_calculator_rejects_unsafe_input(expression):
 def test_file_sandbox_blocks_path_escape():
     with pytest.raises(PermissionError):
         read_file("../secret.txt")
+
+def test_write_file_rejects_title_like_filenames():
+    with pytest.raises(ValueError):
+        write_file("Proposal for Implementing Changes", "text")

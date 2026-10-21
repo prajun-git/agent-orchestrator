@@ -23,7 +23,11 @@ def _run_with_review(specialist: str, task: str, registry: ToolRegistry, context
 
         review = review_output(specialist, last["output"], last["evidence"], task, context)
         if review.approved:
-            return {"status": "done", "output": last["output"], "steps": last["steps"]}
+            had_evidence = bool(last["evidence"].strip())
+            # A research step that honestly found nothing must not feed invented content downstream.
+            status = "no_data" if specialist == "research" and not had_evidence else "done"
+            return {"status": status, "output": last["output"], "steps": last["steps"],
+                    "had_evidence": had_evidence}
 
         print(f"    attempt {attempt} rejected by reviewer:")
         for issue in review.issues:
@@ -31,7 +35,8 @@ def _run_with_review(specialist: str, task: str, registry: ToolRegistry, context
         feedback = "\n".join(f"- {i}" for i in review.issues)
 
     status = "rejected" if last["success"] else "failed"
-    return {"status": status, "output": last["output"], "steps": last["steps"]}
+    return {"status": status, "output": last["output"], "steps": last["steps"],
+            "had_evidence": bool(last.get("evidence", "").strip())}
 
 
 def execute_plan(plan: Plan, registry: ToolRegistry, memory: WorkingMemory | None = None) -> dict[int, dict]:

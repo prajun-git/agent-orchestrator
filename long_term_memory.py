@@ -77,11 +77,17 @@ class LongTermMemory:
 
 def summarize_run(plan, results: dict) -> tuple[list[str], str, list[str]]:
     """Turn a finished run into (plan outline, outcome, lessons) for storage.
-    The lessons are crude, rule-generated notes for now; an LLM can write better ones later."""
+    A run only counts as a success if every step finished AND every research step had real sources."""
     outline = [f"{s.specialist}: {s.description}" for s in plan.subtasks]
     statuses = [results[s.id]["status"] for s in plan.subtasks if s.id in results]
 
-    if statuses and all(x == "done" for x in statuses):
+    unsupported = [
+        s for s in plan.subtasks
+        if s.specialist == "research" and s.id in results
+        and results[s.id]["status"] == "done" and not results[s.id].get("had_evidence", True)
+    ]
+
+    if statuses and all(x == "done" for x in statuses) and not unsupported:
         outcome = "success"
     elif any(x == "done" for x in statuses):
         outcome = "partial"
@@ -92,5 +98,9 @@ def summarize_run(plan, results: dict) -> tuple[list[str], str, list[str]]:
         f"step {s.id} ({s.specialist}) ended as {results[s.id]['status']}"
         for s in plan.subtasks
         if s.id in results and results[s.id]["status"] != "done"
+    ]
+    lessons += [
+        f"step {s.id} (research) found nothing in the knowledge base, so its answer had no sources"
+        for s in unsupported
     ]
     return outline, outcome, lessons

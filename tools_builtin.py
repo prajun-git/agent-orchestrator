@@ -54,6 +54,8 @@ def read_file(filename: str) -> str:
 
 def write_file(filename: str, content: str) -> str:
     """Write text to a file in the workspace folder."""
+    if " " in filename or "." not in Path(filename).name:
+        raise ValueError("filename must look like 'notes.txt' (no spaces, with an extension)")
     path = _safe_path(filename)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")

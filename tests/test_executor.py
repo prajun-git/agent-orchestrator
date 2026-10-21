@@ -86,3 +86,12 @@ def test_executor_logs_errors_in_working_memory(monkeypatch):
     executor.execute_plan(make_plan(), ToolRegistry(), memory)
 
     assert [e["step"] for e in memory.errors] == [1, 2]  # step 1 rejected, step 2 skipped
+
+def test_research_with_no_sources_blocks_dependents(monkeypatch):
+    def fake(specialist, subtask, registry, context="", feedback=""):
+        return {"success": True, "output": "The knowledge base has no information on this topic.",
+                "steps": 1, "evidence": ""}
+
+    results = run_with(monkeypatch, fake)
+    assert results[1]["status"] == "no_data"
+    assert results[2]["status"] == "skipped"

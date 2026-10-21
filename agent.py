@@ -6,6 +6,8 @@ from registry import ToolRegistry
 
 MAX_STEPS = 5
 
+NO_RESULTS_PREFIX = "No relevant documents found"  # must match the message returned by rag.search_knowledge
+
 COMMON_RULES = (
     "\n\nRules for every specialist: your final reply IS the deliverable that the next step "
     "will receive. Write the complete result in your reply text. Never describe what you did "
@@ -85,7 +87,7 @@ def run_specialist(
         for call in ai.tool_calls:
             # Every tool call still goes through the registry gate.
             result = registry.call(call["name"], specialist, **call["args"])
-            if result.success:
+            if result.success and not str(result.output).startswith(NO_RESULTS_PREFIX):
                 evidence.append(str(result.output))
             content = str(result.output) if result.success else f"ERROR: {result.error}"
             messages.append(ToolMessage(content=content, tool_call_id=call["id"]))

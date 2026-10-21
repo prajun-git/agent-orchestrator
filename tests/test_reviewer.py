@@ -28,6 +28,12 @@ CASES = [
     ("comma in a number", "writing",
      "Delivery is free for orders above 1,500 rupees within 10 km of the shop.",
      "", "Summarize delivery", CONTEXT, True),
+         ("fabricated report without evidence", "research",
+     "Market research report: customers want better service. Sources: XYZ Corporation, ABC Inc.",
+     "", "Research the market", "", False),
+    ("honest no-information answer", "research",
+     "The knowledge base has no information on this topic.",
+     "", "Research the market", "", True),
 ]
 
 
