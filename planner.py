@@ -20,9 +20,25 @@ CAP_IF_BLOCKING_QUESTIONS = 0.4
 CAP_IF_ASSUMPTIONS = 0.85
 
 
-def _generate_plan(task: str) -> Plan:
+def format_memories(memories: list[dict]) -> str:
+    """Turn recalled past tasks into a short hints block for the planner prompt."""
+    if not memories:
+        return ""
+    lines = ["Past tasks from this user's history (hints only; the current request may differ, so do not copy blindly):"]
+    for m in memories:
+        lines.append(f"- Task: {m['task']}")
+        lines.append(f"  Outcome: {m['outcome']}")
+        if m["plan"]:
+            lines.append("  Plan used: " + " -> ".join(m["plan"]))
+        for lesson in m["lessons"]:
+            lines.append(f"  Lesson: {lesson}")
+    return "\n".join(lines)
+
+
+def _generate_plan(task: str, memories_text: str = "") -> Plan:
     llm = get_llm()
-    messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=task)]
+    system = SYSTEM_PROMPT + (f"\n\n{memories_text}" if memories_text else "")
+    messages = [SystemMessage(content=system), HumanMessage(content=task)]
 
     try:
         structured = llm.with_structured_output(Plan, method="function_calling")
@@ -43,9 +59,9 @@ def _generate_plan(task: str) -> Plan:
         return Plan.model_validate_json(raw)
 
 
-def create_plan(task: str) -> Plan:
-    plan = _generate_plan(task)
-    # Deterministic guardrail: blocking questions weigh much more than plain assumptions.
+def create_plan(task: str, memories: list[dict] | None = None) -> Plan:
+    plan = _generate_plan(task, format_memories(memories or []))
+    # Deterministic guardrail: memory can inform the plan but never bypass this cap.
     if plan.blocking_questions:
         plan.confidence = min(plan.confidence, CAP_IF_BLOCKING_QUESTIONS)
     elif plan.assumptions:

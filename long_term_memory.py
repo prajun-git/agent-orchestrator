@@ -34,7 +34,7 @@ class LongTermMemory:
         )
         return memory_id
 
-    def recall(self, user_id: str, task: str, k: int = 3, max_distance: float = 1.0) -> list[dict]:
+    def recall(self, user_id: str, task: str, k: int = 3, max_distance: float = 1.5) -> list[dict]:
         """Past tasks of this user that are similar to `task`, closest first."""
         matching = len(self.col.get(where={"user_id": user_id}, include=[])["ids"])
         if matching == 0:
