@@ -14,13 +14,21 @@ EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 MAX_DISTANCE = 1.3  # chunks farther than this are treated as "not relevant"
 
 _store = None
+_embeddings = None
 
+
+def get_embeddings():
+    """Load the embedding model once and share it (loading takes ~20-30 s on this laptop)."""
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+    return _embeddings
 
 def _get_store() -> Chroma:
     """Load the embedding model and vector store once, then reuse them."""
     global _store
     if _store is None:
-        embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+        embeddings = get_embeddings()
         _store = Chroma(
             collection_name="knowledge",
             embedding_function=embeddings,

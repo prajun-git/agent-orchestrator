@@ -5,3 +5,5 @@ __pycache__/
 chroma_index/
 workspace/
 .pytest_cache/
+
+memory_index/
