@@ -2,8 +2,9 @@ from agent import run_specialist
 from registry import ToolRegistry
 from reviewer import review_output
 from schemas import Plan
+from working_memory import WorkingMemory
 
-MAX_ATTEMPTS = 2  # first try plus one revision; raise to 3 later if your hardware is fast
+MAX_ATTEMPTS = 2  # first try plus one revision
 
 
 def _run_with_review(specialist: str, task: str, registry: ToolRegistry, context: str) -> dict:
@@ -33,7 +34,10 @@ def _run_with_review(specialist: str, task: str, registry: ToolRegistry, context
     return {"status": status, "output": last["output"], "steps": last["steps"]}
 
 
-def execute_plan(plan: Plan, registry: ToolRegistry) -> dict[int, dict]:
+def execute_plan(plan: Plan, registry: ToolRegistry, memory: WorkingMemory | None = None) -> dict[int, dict]:
+    memory = memory or WorkingMemory()
+    memory.set("plan", plan.model_dump())
+
     results: dict[int, dict] = {}
     pending = {s.id: s for s in plan.subtasks}
 
@@ -43,6 +47,8 @@ def execute_plan(plan: Plan, registry: ToolRegistry) -> dict[int, dict]:
         if not ready:  # nothing can ever run: bad ids or a dependency cycle
             for s in pending.values():
                 results[s.id] = {"status": "failed", "output": "unresolvable dependencies", "steps": 0}
+                memory.record_step(s.id, "failed", "unresolvable dependencies")
+                memory.log_error(s.id, "unresolvable dependencies")
             break
 
         for s in sorted(ready, key=lambda x: x.id):
@@ -51,12 +57,19 @@ def execute_plan(plan: Plan, registry: ToolRegistry) -> dict[int, dict]:
             bad_deps = [d for d in s.depends_on if results[d]["status"] != "done"]
             if bad_deps:
                 print(f"  [executor] step {s.id} skipped (depends on unfinished step {bad_deps})")
-                results[s.id] = {"status": "skipped", "output": f"skipped: step(s) {bad_deps} did not finish", "steps": 0}
+                msg = f"skipped: step(s) {bad_deps} did not finish"
+                results[s.id] = {"status": "skipped", "output": msg, "steps": 0}
+                memory.record_step(s.id, "skipped", msg)
+                memory.log_error(s.id, msg)
                 continue
 
-            context = "\n\n".join(f"Output of step {d}:\n{results[d]['output']}" for d in s.depends_on)
+            # Outputs of earlier steps now come from working memory, not a private dict.
+            context = "\n\n".join(f"Output of step {d}:\n{memory.step_output(d)}" for d in s.depends_on)
             task = f"{s.description}\nExpected output: {s.expected_output}"
             print(f"  [executor] step {s.id} ({s.specialist}): {s.description}")
 
             results[s.id] = _run_with_review(s.specialist, task, registry, context)
+            memory.record_step(s.id, results[s.id]["status"], results[s.id]["output"])
+            if results[s.id]["status"] != "done":
+                memory.log_error(s.id, f"step ended as {results[s.id]['status']}")
     return results

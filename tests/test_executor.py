@@ -1,6 +1,7 @@
 import executor
 from registry import ToolRegistry
 from schemas import Plan, Subtask
+from working_memory import WorkingMemory
 
 EVIDENCE = "[acme_bakery_policy.md] (distance 1.03)\nRefunds are available within 7 days for unopened packaged goods."
 BAD = "Refunds are available within 14 days for unopened goods."  # 14 is not in the evidence
@@ -59,3 +60,29 @@ def test_crash_is_reported_as_failed_and_skips_dependents(monkeypatch):
     results = run_with(monkeypatch, fake)
     assert results[1]["status"] == "failed"
     assert results[2]["status"] == "skipped"
+
+
+def test_executor_records_outputs_in_working_memory(monkeypatch):
+    def fake(specialist, subtask, registry, context="", feedback=""):
+        out = GOOD if specialist == "research" else "Summary: refunds are available within 7 days for unopened goods."
+        return {"success": True, "output": out, "steps": 1, "evidence": EVIDENCE}
+
+    memory = WorkingMemory("demo")
+    monkeypatch.setattr(executor, "run_specialist", fake)
+    executor.execute_plan(make_plan(), ToolRegistry(), memory)
+
+    assert memory.step_output(1) == GOOD
+    assert memory.get("step:2")["status"] == "done"
+    assert memory.get("plan")["goal"] == "demo"
+    assert memory.errors == []
+
+
+def test_executor_logs_errors_in_working_memory(monkeypatch):
+    def fake(specialist, subtask, registry, context="", feedback=""):
+        return {"success": True, "output": BAD, "steps": 1, "evidence": EVIDENCE}
+
+    memory = WorkingMemory("demo")
+    monkeypatch.setattr(executor, "run_specialist", fake)
+    executor.execute_plan(make_plan(), ToolRegistry(), memory)
+
+    assert [e["step"] for e in memory.errors] == [1, 2]  # step 1 rejected, step 2 skipped
