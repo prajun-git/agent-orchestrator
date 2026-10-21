@@ -1,7 +1,11 @@
 import os
+import uuid
 from typing import TypedDict
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
+from langgraph.types import Command, interrupt
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from executor import execute_plan
 from long_term_memory import LongTermMemory, summarize_run
@@ -12,6 +16,7 @@ from tools_builtin import build_registry
 from working_memory import WorkingMemory
 
 MAX_CLARIFY_ROUNDS = 2
+ROOT_PROBLEMS = {"no_data", "rejected", "failed"}  # "skipped" is only a consequence of these
 _memory = None
 
 
@@ -33,6 +38,7 @@ class State(TypedDict):
     step_results: dict
     tool_log: list
     result: str
+    decision: str
 
 
 def recall_node(state: State) -> dict:
@@ -85,6 +91,53 @@ def executor_node(state: State) -> dict:
     return {"step_results": results, "tool_log": registry.log, "result": "\n\n".join(sections)}
 
 
+def escalation_node(state: State) -> dict:
+    """Pause for a human when a step ended without usable output.
+    NOTE: on resume this node runs again from its first line, so everything before
+    interrupt() must be side-effect free."""
+    plan, results = state["plan"], state["step_results"]
+    problems = [
+        {
+            "step": s.id,
+            "description": s.description,
+            "status": results[s.id]["status"],
+            "detail": str(results[s.id]["output"])[:200],
+        }
+        for s in plan.subtasks
+        if s.id in results and results[s.id]["status"] in ROOT_PROBLEMS
+    ]
+    if not problems:
+        return {"decision": "continue"}
+
+    completed = [
+        {"step": s.id, "description": s.description}
+        for s in plan.subtasks
+        if s.id in results and results[s.id]["status"] == "done"
+    ]
+    answer = interrupt({"task": state["task"], "problems": problems, "completed": completed})
+
+    action = answer.get("action")
+    if action == "provide" and state["rounds"] < MAX_CLARIFY_ROUNDS:
+        return {
+            "decision": "replan",
+            "clarifications": state["clarifications"]
+            + [f"Information provided by the human reviewer: {answer.get('text', '')}"],
+            "rounds": state["rounds"] + 1,
+        }
+    if action == "accept":
+        flagged = ", ".join(f"step {p['step']} ({p['status']})" for p in problems)
+        return {
+            "decision": "accept",
+            "result": f"[Accepted by human reviewer with unresolved problems: {flagged}]\n\n{state['result']}",
+        }
+    reason = "Stopped by the human reviewer." if action == "abort" else "Stopped: too many review rounds."
+    return {"decision": "abort", "result": reason}
+
+
+def route_after_escalation(state: State) -> str:
+    return "planner" if state["decision"] == "replan" else "remember"
+
+
 def give_up_node(state: State) -> dict:
     return {"result": "Stopped: the task is still too unclear after asking for clarification."}
 
@@ -99,6 +152,9 @@ def remember_node(state: State) -> dict:
         questions = "; ".join(plan.blocking_questions) if plan else "unknown"
         lessons = [f"request stayed too vague after clarification; unanswered questions: {questions}"]
 
+    if state.get("decision") in {"accept", "abort"}:
+        lessons = lessons + [f"a human reviewer stepped in and chose to {state['decision']}"]
+
     get_memory().remember(state["user_id"], state["task"], outline, outcome, lessons)
     print(f"[memory] saved this run as '{outcome}'")
     return {}
@@ -109,6 +165,7 @@ graph.add_node("recall", recall_node)
 graph.add_node("planner", planner_node)
 graph.add_node("clarify", clarify_node)
 graph.add_node("executor", executor_node)
+graph.add_node("escalation", escalation_node)
 graph.add_node("give_up", give_up_node)
 graph.add_node("remember", remember_node)
 
@@ -116,14 +173,43 @@ graph.add_edge(START, "recall")
 graph.add_edge("recall", "planner")
 graph.add_conditional_edges("planner", route_after_plan, ["clarify", "executor", "give_up"])
 graph.add_edge("clarify", "planner")
-graph.add_edge("executor", "remember")
+graph.add_edge("executor", "escalation")
+graph.add_conditional_edges("escalation", route_after_escalation, ["planner", "remember"])
 graph.add_edge("give_up", "remember")
 graph.add_edge("remember", END)
 
-app = graph.compile()
+def make_checkpointer() -> MemorySaver:
+    """In-memory checkpointer that is explicitly allowed to restore our own classes."""
+    serde = JsonPlusSerializer(allowed_msgpack_modules=[("schemas", "Plan"), ("schemas", "Subtask")])
+    return MemorySaver(serde=serde)
+
+
+app = graph.compile(checkpointer=make_checkpointer())
+
+def ask_human(payload: dict) -> dict:
+    """Terminal version of the review screen. A web UI would show the same payload."""
+    print("\n=== HUMAN REVIEW NEEDED ===")
+    print(f"Task: {payload['task']}")
+    print("Problems:")
+    for p in payload["problems"]:
+        print(f"  step {p['step']} [{p['status']}]: {p['description']}")
+        print(f"      {p['detail']}")
+    if payload["completed"]:
+        print("Completed steps: " + ", ".join(str(c["step"]) for c in payload["completed"]))
+    print("\nChoose: 'accept' (deliver as is), 'abort', or type the missing information to retry")
+    while True:
+        choice = input("> ").strip()
+        if choice.lower() in {"accept", "a"}:
+            return {"action": "accept"}
+        if choice.lower() in {"abort", "x"}:
+            return {"action": "abort"}
+        if choice:
+            return {"action": "provide", "text": choice}
+
 
 if __name__ == "__main__":
     task = input("Task: ")
+    config = {"configurable": {"thread_id": uuid.uuid4().hex}}  # identifies this run for pause/resume
     out = app.invoke(
         {
             "user_id": os.environ.get("AGENT_USER_ID", "me"),
@@ -135,8 +221,14 @@ if __name__ == "__main__":
             "step_results": {},
             "tool_log": [],
             "result": "",
-        }
+            "decision": "",
+        },
+        config,
     )
+    while "__interrupt__" in out:  # the graph is paused and waiting for a person
+        answer = ask_human(out["__interrupt__"][0].value)
+        out = app.invoke(Command(resume=answer), config)
+
     print("\n=== RESULT ===")
     print(out["result"])
     print("\n=== TOOL CALLS ===")
